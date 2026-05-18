@@ -357,8 +357,9 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start",         cmd_start))
-    app.add_handler(CommandHandler("señal",         cmd_signal))
+    app.add_handler(CommandHandler("signal",        cmd_signal))
     app.add_handler(CommandHandler("senal",         cmd_signal))
+    app.add_handler(CommandHandler("analizar",      cmd_signal))
     app.add_handler(CommandHandler("estado",        cmd_estado))
     app.add_handler(CommandHandler("pares",         cmd_pares))
     app.add_handler(CommandHandler("vencimiento1",  cmd_v1))
@@ -392,6 +393,7 @@ def main():
                         f"📊 *Resultado:* automático al vencimiento\n"
                         f"⏰ *Envío:* 10 seg antes del minuto\n\n"
                         "Comandos:\n"
+                        "/signal \\| /senal \\| /analizar \\| /estado \\| /pares\n"
                         "/vencimiento1 \\| /vencimiento2 \\| /vencimiento5 \\| /vencimiento15"
                     ),
                     parse_mode="MarkdownV2",
