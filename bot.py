@@ -6,16 +6,10 @@ Características:
   - Envía SOLO 1 señal por ciclo (la más fiable por score)
   - Garantiza mínimo 1 señal cada 5 minutos
   - Envía la señal 10 segundos ANTES del inicio del minuto
-  - Al vencimiento, envía el RESULTADO automático (✅ GANADA / ❌ PERDIDA)
+  - Al vencimiento, envía el RESULTADO automático (GANADA / PERDIDA)
   - Vencimiento configurable: 1, 2, 5 o 15 minutos
   - Estrategia: Vdub Binary Options Sniper (TEMA/DEMA)
-  - Compatible con Railway.app para ejecución 24/7
-
-Uso local:
-    python3 bot.py
-
-Uso en Railway:
-    Configurar variables de entorno en el panel de Railway.
+  - Usa WEBHOOK para compatibilidad total con Railway.app 24/7
 """
 
 import asyncio
@@ -52,18 +46,18 @@ logger = logging.getLogger("BinaryBot")
 
 # ─────────────────────────────────────────────
 # Variables de entorno
-# Funciona tanto con archivo .env (local) como
-# con variables de Railway (producción 24/7)
 # ─────────────────────────────────────────────
-load_dotenv()  # Carga .env si existe (local), ignorado en Railway
+load_dotenv()
 
 BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHANNEL_ID     = os.environ.get("TELEGRAM_CHANNEL_ID", "")
 ADMIN_ID       = os.environ.get("ADMIN_CHAT_ID", "")
 TIMEFRAME      = os.environ.get("TIMEFRAME", "1m")
 DEFAULT_EXPIRY = int(os.environ.get("EXPIRY_MINUTES", "1"))
+WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "")   # Se configura en Railway
+PORT           = int(os.environ.get("PORT", "8080"))  # Railway asigna el puerto
 
-INTERVAL_MIN   = 5   # Ciclo cada 5 minutos
+INTERVAL_MIN   = 5
 
 # ─────────────────────────────────────────────
 # Estado global
@@ -130,7 +124,7 @@ def fetch_ohlcv(exchange, symbol, timeframe="1m", limit=200):
         logger.warning(f"Error fetch {symbol}: {e}")
         return None
 
-def fetch_current_price(exchange, kucoin_symbol: str) -> float | None:
+def fetch_current_price(exchange, kucoin_symbol: str):
     try:
         ticker = exchange.fetch_ticker(kucoin_symbol)
         return float(ticker["last"])
@@ -149,7 +143,7 @@ async def wait_until_10s_before_minute():
     if wait_secs < 0:
         wait_secs += 60
     if wait_secs > 0.1:
-        logger.info(f"Esperando {wait_secs:.1f}s → envío 10s antes del minuto")
+        logger.info(f"Esperando {wait_secs:.1f}s para enviar 10s antes del minuto")
         await asyncio.sleep(wait_secs)
 
 
@@ -157,7 +151,7 @@ async def wait_until_10s_before_minute():
 # Resultado automático al vencimiento
 # ─────────────────────────────────────────────
 async def check_and_send_result(
-    app: Application,
+    app,
     chat_id: str,
     kucoin_symbol: str,
     display_name: str,
@@ -190,7 +184,7 @@ async def check_and_send_result(
     logger.info(
         f"RESULTADO: {display_name} | {direction} | "
         f"Entrada: {entry_price} | Salida: {exit_price} | "
-        f"{'✅ GANADA' if won else '❌ PERDIDA'}"
+        f"{'GANADA' if won else 'PERDIDA'}"
     )
 
     msg = format_result(
@@ -211,9 +205,9 @@ async def check_and_send_result(
 
 
 # ═══════════════════════════════════════════════
-# FUNCIÓN PRINCIPAL DE ANÁLISIS
+# FUNCION PRINCIPAL DE ANALISIS
 # ═══════════════════════════════════════════════
-async def run_analysis(app: Application, chat_id: str | None = None) -> None:
+async def run_analysis(app, chat_id=None) -> None:
     target = chat_id or CHANNEL_ID
     expiry = bot_state["expiry_minutes"]
 
@@ -267,7 +261,7 @@ async def run_analysis(app: Application, chat_id: str | None = None) -> None:
         msg = format_binary_signal(best_signal, expiry_minutes=expiry)
         await app.bot.send_message(chat_id=target, text=msg, parse_mode="MarkdownV2")
         bot_state["last_signal_time"] = datetime.now(timezone.utc)
-        logger.info(f"Señal enviada: {best_signal['symbol']} | {best_signal['direction']} | Entrada: {entry_price}")
+        logger.info(f"Señal enviada: {best_signal['symbol']} | {best_signal['direction']}")
     except Exception as e:
         logger.error(f"Error enviando señal: {e}")
         return
@@ -293,7 +287,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_signal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = str(update.effective_chat.id)
-    await update.message.reply_text("🔄 *Analizando los 19 pares Forex\\.\\.\\.*", parse_mode="MarkdownV2")
+    await update.message.reply_text("Analizando los 19 pares Forex...", parse_mode=None)
     await run_analysis(context.application, chat_id=chat_id)
 
 async def cmd_estado(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -320,7 +314,7 @@ async def cmd_pares(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def set_expiry(update, context, minutes: int):
     bot_state["expiry_minutes"] = minutes
     await update.message.reply_text(format_expiry_changed(minutes), parse_mode="MarkdownV2")
-    logger.info(f"Vencimiento → {minutes} minuto(s)")
+    logger.info(f"Vencimiento -> {minutes} minuto(s)")
 
 async def cmd_v1(u, c):  await set_expiry(u, c, 1)
 async def cmd_v2(u, c):  await set_expiry(u, c, 2)
@@ -331,27 +325,25 @@ async def cmd_v15(u, c): await set_expiry(u, c, 15)
 # ═══════════════════════════════════════════════
 # SCHEDULER — cada 5 minutos exactos
 # ═══════════════════════════════════════════════
-async def scheduled_job(app: Application):
+async def scheduled_job(app):
     now = datetime.now(timezone.utc)
     logger.info(f"[AUTO] {now.strftime('%H:%M:%S UTC')}")
     await run_analysis(app)
 
 
 # ═══════════════════════════════════════════════
-# MAIN
+# MAIN — Webhook para Railway, Polling para local
 # ═══════════════════════════════════════════════
 def main():
     if not BOT_TOKEN:
-        logger.critical("❌ No se encontró TELEGRAM_BOT_TOKEN")
-        logger.critical("   Local: crea el archivo .env con TELEGRAM_BOT_TOKEN=tu_token")
-        logger.critical("   Railway: agrega la variable en el panel de Variables")
+        logger.critical("No se encontro TELEGRAM_BOT_TOKEN")
         return
 
     logger.info("=" * 55)
-    logger.info("  BOT DE SEÑALES — OPCIONES BINARIAS  (24/7)")
+    logger.info("  BOT DE SENALES - OPCIONES BINARIAS  (24/7)")
     logger.info("  Estrategia: Vdub Binary Options Sniper")
     logger.info(f"  Pares: {len(KUCOIN_PAIRS)} | Ciclo: cada {INTERVAL_MIN} min")
-    logger.info(f"  1 señal por ciclo | Resultado automático")
+    logger.info(f"  1 senal por ciclo | Resultado automatico")
     logger.info("=" * 55)
 
     app = Application.builder().token(BOT_TOKEN).build()
@@ -377,34 +369,44 @@ def main():
         misfire_grace_time=30,
     )
 
-    async def post_init(application: Application):
+    async def post_init(application):
         scheduler.start()
-        logger.info("Scheduler activo: análisis en :00, :05, :10... cada hora")
+        logger.info("Scheduler activo: analisis en :00, :05, :10... cada hora")
         if ADMIN_ID:
             try:
                 await application.bot.send_message(
                     chat_id=ADMIN_ID,
                     text=(
-                        "🚀 *Bot de Binarias iniciado \\(24/7\\)*\n\n"
-                        f"📊 *Pares:* `{len(KUCOIN_PAIRS)}` pares Forex\n"
-                        f"⌛ *Vencimiento:* `{DEFAULT_EXPIRY}` min\n"
-                        f"🔄 *Ciclo:* cada `{INTERVAL_MIN}` minutos\n"
-                        f"🎯 *Por ciclo:* 1 señal \\(la más fiable\\)\n"
-                        f"📊 *Resultado:* automático al vencimiento\n"
-                        f"⏰ *Envío:* 10 seg antes del minuto\n\n"
-                        "Comandos:\n"
-                        "/signal \\| /senal \\| /analizar \\| /estado \\| /pares\n"
-                        "/vencimiento1 \\| /vencimiento2 \\| /vencimiento5 \\| /vencimiento15"
+                        "Bot de Binarias iniciado (24/7)\n\n"
+                        f"Pares: {len(KUCOIN_PAIRS)} pares Forex\n"
+                        f"Vencimiento: {DEFAULT_EXPIRY} min\n"
+                        f"Ciclo: cada {INTERVAL_MIN} minutos\n"
+                        f"1 senal por ciclo (la mas fiable)\n"
+                        f"Resultado: automatico al vencimiento\n"
+                        f"Envio: 10 seg antes del minuto\n\n"
+                        "Comandos: /signal /senal /analizar /estado /pares\n"
+                        "/vencimiento1 /vencimiento2 /vencimiento5 /vencimiento15"
                     ),
-                    parse_mode="MarkdownV2",
                 )
             except Exception as e:
                 logger.warning(f"No se pudo notificar admin: {e}")
 
     app.post_init = post_init
 
-    logger.info("Bot en ejecución 24/7. Presiona Ctrl+C para detener.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Si hay WEBHOOK_URL configurado (Railway), usar webhook
+    # Si no (local), usar polling
+    if WEBHOOK_URL:
+        logger.info(f"Modo WEBHOOK: {WEBHOOK_URL}")
+        logger.info(f"Puerto: {PORT}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=WEBHOOK_URL,
+            allowed_updates=Update.ALL_TYPES,
+        )
+    else:
+        logger.info("Modo POLLING (local)")
+        app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
